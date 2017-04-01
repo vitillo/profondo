@@ -10,14 +10,14 @@ from cStringIO import StringIO
 requests_cache.install_cache('tmdb_cache', backend='sqlite')
 
 
-class TMDB:
+class TMDBW:
     """ TMDB wrapper for retrieving movie posters into numpy arrays.
 
     Usage example::
 
         from skimage.viewer import ImageViewer
         from tmdb import TMDB
-        t = TMDB("APIKEY")
+        t = TMDBW("APIKEY")
         poster = t.get_movie("tt0062622")["poster"]
         ImageViewer(poster).show()
 
