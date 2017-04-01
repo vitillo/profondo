@@ -1,0 +1,2 @@
+requests-cache==0.4.13
+IMDbPY==5.1.1
