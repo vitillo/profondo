@@ -16,7 +16,7 @@ class IMDBW:
 
     Usage example::
 
-        imdb = IMDB()
+        imdb = IMDBW()
         poster = t.get_movie("0062622")["poster"]
         ImageViewer(poster).show()
 
@@ -60,14 +60,18 @@ class IMDBW:
             poster_data = imread(data)
 
         return {
-          "genres": movie.get("genres", []),
-          "poster": poster_data,
           "adult": is_adult_movie,
-          "budget": None,
+          "assistant_directors": [d.get("name") for d in movie.get("assistant director", [])],
+          "cast": [c.get("name") for c in movie.get("cast", [])],
+          "directors": [d.get("name") for d in movie.get("director", [])],
+          "genres": movie.get("genres", []),
           "languages": movie.get("languages", []),
-          "title": movie.get("title"),
-          "overview": movie.get("plot"),
-          "tagline": None,
+          "overview": movie.get("plot outline"),
+          "plot": movie.get("plot"),
+          "poster": poster_data,
+          "producers": [p.get("name") for p in movie.get("producer", [])],
           "release_date": movie.get("year"),
-          "revenue": None
+          "title": movie.get("title"),
+          "visual_effects": [d.get("name") for d in movie.get("visual effects", [])],
+          "writers": [w.get("name") for w in movie.get("writer", [])]
         }
