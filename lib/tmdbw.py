@@ -68,6 +68,7 @@ class TMDBW:
         movie = json.loads(self._request("/movie/{}".format(imdb_id)))
         poster = StringIO(self._request_image("/{}{}".format(size, movie["poster_path"])))
         return {
+          "imdb_id": imdb_id,
           "adult": movie["adult"],
           "budget": movie["budget"],
           "genres": [g["name"] for g in movie["genres"]],
