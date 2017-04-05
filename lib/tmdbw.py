@@ -60,15 +60,20 @@ class TMDBW:
                 if limit == 0:
                     return
 
-    def get_movie(self, imdb_id, size="original"):
-        logging.debug("get_movie({}, {})".format(imdb_id, size))
+    def get_movie(self, movie_id, size="original"):
+        """Get the movie details.
+
+        :param movie_id: this can either be a TMDB or an IMDB id.
+        """
+        logging.debug("get_movie({}, {})".format(movie_id, size))
         if size not in self.poster_sizes:
             raise Exception("Poster size {} is not in {}.".format(size, self.poster_sizes))
 
-        movie = json.loads(self._request("/movie/{}".format(imdb_id)))
+        movie = json.loads(self._request("/movie/{}".format(movie_id)))
         poster = StringIO(self._request_image("/{}{}".format(size, movie["poster_path"])))
         return {
-          "imdb_id": imdb_id,
+          "imdb_id": movie["imdb_id"],
+          "tmdb_id": movie["id"],
           "adult": movie["adult"],
           "budget": movie["budget"],
           "genres": [g["name"] for g in movie["genres"]],
