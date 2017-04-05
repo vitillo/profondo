@@ -60,7 +60,7 @@ class IMDBW:
             poster_data = imread(data)
 
         return {
-          "tmdb_id": movie_id,
+          "imdb_id": "tt{}".format(movie_id),
           "adult": is_adult_movie,
           "assistant_directors": [d.get("name") for d in movie.get("assistant director", [])],
           "cast": [c.get("name") for c in movie.get("cast", [])],

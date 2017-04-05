@@ -86,3 +86,8 @@ class TMDBW:
           "tagline": movie["tagline"],
           "title": movie["title"]
         }
+
+    def get_genres(self):
+        """Get the list of genres defined on TMDB"""
+        genres = json.loads(self._request("/genre/movie/list"))["genres"]
+        return [g["name"] for g in genres]
