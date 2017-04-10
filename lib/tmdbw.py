@@ -33,12 +33,22 @@ class TMDBW:
         self.genres = json.loads(self._request("/genre/movie/list", {"language": "en-US"}))
         self.images_base_url = self.config["images"]["base_url"]
 
-    def _request(self, request, params={}):
-        params = dict(self.api_params.items() + params.items())
-        return requests.get(self.service_url + request, params).content
+    def _request(self, request, params={}, base=None):
+        if base is None:
+            base = self.service_url
+
+        while True:
+            params = dict(self.api_params.items() + params.items())
+            req = requests.get(base + request, params)
+            if req.status_code == 429:
+                retry_after = req.headers["Retry-After"]
+                logging.debug("_request({}) - retrying after {} s".format(request, retry_after))
+                time.sleep(retry_after + 1)
+                continue
+            return req.content
 
     def _request_image(self, request, params={}):
-        return requests.get(self.images_base_url + request, self.api_params).content
+        return self._request(request, params=params, base=self.images_base_url)
 
     def get_top_movies(self, release_year=None, limit=10):
         logging.debug("get_top_movies({}, {})".format(release_year, limit))
