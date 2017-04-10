@@ -3,6 +3,7 @@ import requests_cache
 import json
 import operator
 import logging
+import traceback
 
 from skimage.io import imread
 from cStringIO import StringIO
@@ -48,6 +49,7 @@ class TMDBW:
 
         page = 1
         pages = json.loads(self._request("/discover/movie", params))["total_pages"]
+        movie_num = 0
         while page <= pages:
             logging.debug("get_top_movies - fetching page {}".format(page))
             params["page"] = page
@@ -55,12 +57,25 @@ class TMDBW:
 
             movies = json.loads(self._request("/discover/movie", params))["results"]
             for movie in movies:
-                yield self.get_movie(movie["id"])
-                limit -= 1
-                if limit == 0:
-                    return
+                try:
+                    logging.debug("get_top_movies - fetching movie {}".format(movie_num))
+                    yield self.get_movie(movie["id"])
+                    limit -= 1
+                    movie_num += 1
+                    if limit == 0:
+                        return
+                except Exception as e:
+                    logging.warning("get_top_movies - failed to fetch movie {}".format(movie_num))
+                    traceback.print_exc()
 
-    def get_movie(self, movie_id, size="original"):
+    def _get_crew(self, credits, job):
+        results = []
+        for crew in credits["crew"]:
+            if crew["job"] == job:
+                results.append(crew["name"])
+        return results
+
+    def get_movie(self, movie_id, size="w500"):
         """Get the movie details.
 
         :param movie_id: this can either be a TMDB or an IMDB id.
@@ -69,15 +84,38 @@ class TMDBW:
         if size not in self.poster_sizes:
             raise Exception("Poster size {} is not in {}.".format(size, self.poster_sizes))
 
-        movie = json.loads(self._request("/movie/{}".format(movie_id)))
+        params = {
+          "append_to_response": "credits,keywords"
+        }
+        movie = json.loads(self._request("/movie/{}".format(movie_id), params))
         poster = StringIO(self._request_image("/{}{}".format(size, movie["poster_path"])))
+
+        actors = movie["credits"]["cast"]
+        actor1 = actors[0]["name"] if len(actors) > 0 else None
+        actor2 = actors[1]["name"] if len(actors) > 1 else None
+
+        directors = self._get_crew(movie["credits"], "Director")
+        director = directors[0] if directors else None
+
+        producers = self._get_crew(movie["credits"], "Producer")
+        producer1 = producers[0] if producers else None
+
+        writers = self._get_crew(movie["credits"], "Screenplay")
+        writer1 = writers[0] if writers else None
+
         return {
           "imdb_id": movie["imdb_id"],
           "tmdb_id": movie["id"],
+          "actor1": actor1,
+          "actor2": actor2,
+          "director": director,
+          "producer1": producer1,
+          "writer1": writer1,
+          "keywords": ",".join([k["name"] for k in movie["keywords"]["keywords"]]),
           "adult": movie["adult"],
           "budget": movie["budget"],
           "genres": [g["name"] for g in movie["genres"]],
-          "languages": [movie["original_language"]],
+          "language": movie["original_language"],
           "overview": movie["overview"],
           "poster": imread(poster),
           "release_date": movie["release_date"],
