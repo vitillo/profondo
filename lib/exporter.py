@@ -28,7 +28,7 @@ if __name__ == "__main__":
         del movie["poster"]
         data.append(movie)
 
-    pd.DataFrame(data).to_pickle("data_export")
+    pd.DataFrame(data).to_pickle("metadata_export")
     np.save("image_export", np.array(images))
     end_time = time()
 

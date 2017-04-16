@@ -5,6 +5,7 @@ import operator
 import logging
 import traceback
 
+from skimage import transform
 from skimage.io import imread
 from cStringIO import StringIO
 
@@ -85,7 +86,7 @@ class TMDBW:
                 results.append(crew["name"])
         return results
 
-    def get_movie(self, movie_id, size="w500"):
+    def get_movie(self, movie_id, size="w92", image_width=None):
         """Get the movie details.
 
         :param movie_id: this can either be a TMDB or an IMDB id.
@@ -113,6 +114,11 @@ class TMDBW:
         writers = self._get_crew(movie["credits"], "Screenplay")
         writer1 = writers[0] if writers else None
 
+        if image_width is None:
+            image_width = int(size[1:])
+        image_height = int(1.5*image_width)
+        transformed_poster = transform.resize(imread(poster), (image_height, image_width, 3))
+
         return {
           "imdb_id": movie["imdb_id"],
           "tmdb_id": movie["id"],
@@ -127,7 +133,7 @@ class TMDBW:
           "genres": [g["name"] for g in movie["genres"]],
           "language": movie["original_language"],
           "overview": movie["overview"],
-          "poster": imread(poster),
+          "poster": transformed_poster,
           "release_date": movie["release_date"],
           "revenue": movie["revenue"],
           "runtime": movie["runtime"],
