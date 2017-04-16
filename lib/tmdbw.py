@@ -4,6 +4,7 @@ import json
 import operator
 import logging
 import traceback
+import time
 
 from skimage import transform
 from skimage.io import imread
@@ -44,7 +45,7 @@ class TMDBW:
             if req.status_code == 429:
                 retry_after = req.headers["Retry-After"]
                 logging.debug("_request({}) - retrying after {} s".format(request, retry_after))
-                time.sleep(retry_after + 1)
+                time.sleep(int(retry_after) + 1)
                 continue
             return req.content
 
