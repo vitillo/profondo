@@ -60,7 +60,7 @@ class TMDBW:
         }
 
         page = 1
-        pages = json.loads(self._request("/discover/movie", params))["total_pages"]
+        pages = min(json.loads(self._request("/discover/movie", params))["total_pages"], 1000)
         movie_num = 0
         while page <= pages:
             logging.debug("get_top_movies - fetching page {}".format(page))
