@@ -23,9 +23,10 @@ if __name__ == "__main__":
     tmdb = TMDBW(args.api_key)
     data = []
     image_export = tables.open_file("image_export.h5", mode="w")
+    filters = tables.Filters(complevel=9, complib='blosc')
     image_shape = list(tmdb.get_top_movies(limit=1).next()["poster"].shape)
     images = image_export.create_earray(image_export.root, 'images',
-        tables.Float32Atom(), [0] + image_shape, "images")
+        tables.Float32Atom(), [0] + image_shape, "images", filters=filters)
 
     for movie in tmdb.get_top_movies(limit=args.limit):
         images.append(movie["poster"].reshape([1] + image_shape))
