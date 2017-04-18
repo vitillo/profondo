@@ -5,6 +5,7 @@ import operator
 import logging
 import traceback
 import time
+import heapq
 
 from skimage import transform
 from skimage.io import imread
@@ -52,10 +53,10 @@ class TMDBW:
     def _request_image(self, request, params={}):
         return self._request(request, params=params, base=self.images_base_url)
 
-    def get_top_movies(self, release_year=None, limit=10):
-        logging.debug("get_top_movies({}, {})".format(release_year, limit))
+    def _get_top_movies_in_year(self, year):
+        logging.debug("get_top_movies_in_year({})".format(year))
         params = {
-          "primary_release_year": release_year,
+          "primary_release_year": year,
           "sort_by": "popularity.desc"
         }
 
@@ -63,22 +64,44 @@ class TMDBW:
         pages = min(json.loads(self._request("/discover/movie", params))["total_pages"], 1000)
         movie_num = 0
         while page <= pages:
-            logging.debug("get_top_movies - fetching page {}".format(page))
+            logging.debug("get_top_movies_in_year({}) - fetching page {}".format(year, page))
             params["page"] = page
             page += 1
 
             movies = json.loads(self._request("/discover/movie", params))["results"]
             for movie in movies:
                 try:
-                    logging.debug("get_top_movies - fetching movie {}".format(movie_num))
+                    logging.debug("get_top_movies_in_year({}) - fetching movie {}".format(year, movie_num))
                     yield self.get_movie(movie["id"])
-                    limit -= 1
                     movie_num += 1
-                    if limit == 0:
-                        return
-                except Exception as e:
-                    logging.warning("get_top_movies - failed to fetch movie {}".format(movie_num))
+                except Exception:
+                    logging.warning("get_top_movies_in_year({}) - failed to fetch movie {}".format(year, movie_num))
                     traceback.print_exc()
+
+    def get_top_movies(self, from_year=2000, to_year=2017, limit=10):
+        # This unconvient way of fetching data is needed to avoid hitting the
+        # maximum page limit of 1000.
+        years = [self._get_top_movies_in_year(y)
+                 for y in range(from_year, to_year + 1)]
+        movies = [y.next() for y in years]
+
+        heap = [(-m["popularity"], m, y) for m, y in zip(movies, years)]
+        heapq.heapify(heap)
+
+        movie_num = 0
+        while movie_num < limit and heap:
+            logging.debug("get_top_movies - returning movie {}".format(movie_num))
+            # Note that popularity might change while retrieving the data
+            # so no absolute ordering guarantee can be made.
+            p, movie, year = heapq.heappop(heap)
+            movie_num += 1
+            yield movie
+
+            try:
+                next_movie = year.next()
+                heapq.heappush(heap, (-next_movie["popularity"], next_movie, year))
+            except StopIteration:
+                continue
 
     def _get_crew(self, credits, job):
         results = []
@@ -139,7 +162,8 @@ class TMDBW:
           "revenue": movie["revenue"],
           "runtime": movie["runtime"],
           "tagline": movie["tagline"],
-          "title": movie["title"]
+          "title": movie["title"],
+          "popularity": movie["popularity"]
         }
 
     def get_genres(self):
