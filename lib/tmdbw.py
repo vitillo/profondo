@@ -5,7 +5,6 @@ import operator
 import logging
 import traceback
 import time
-import heapq
 
 from skimage import transform
 from skimage.io import imread
@@ -53,10 +52,10 @@ class TMDBW:
     def _request_image(self, request, params={}):
         return self._request(request, params=params, base=self.images_base_url)
 
-    def _get_top_movies_in_year(self, year):
-        logging.debug("get_top_movies_in_year({})".format(year))
+    def _get_top_movies(self, genre_id):
+        logging.debug("_get_top_movies({})".format(genre_id))
         params = {
-          "primary_release_year": year,
+          "with_genres": genre_id,
           "sort_by": "popularity.desc"
         }
 
@@ -64,44 +63,47 @@ class TMDBW:
         pages = min(json.loads(self._request("/discover/movie", params))["total_pages"], 1000)
         movie_num = 0
         while page <= pages:
-            logging.debug("get_top_movies_in_year({}) - fetching page {}".format(year, page))
+            logging.debug("_get_top_movies({}) - fetching page {}".format(genre_id, page))
             params["page"] = page
             page += 1
 
             movies = json.loads(self._request("/discover/movie", params))["results"]
             for movie in movies:
                 try:
-                    logging.debug("get_top_movies_in_year({}) - fetching movie {}".format(year, movie_num))
+                    logging.debug("_get_top_movies({}) - fetching movie {}".format(genre_id, movie_num))
                     yield self.get_movie(movie["id"])
                     movie_num += 1
                 except Exception:
-                    logging.warning("get_top_movies_in_year({}) - failed to fetch movie {}".format(year, movie_num))
+                    logging.warning("_get_top_movies({}) - failed to fetch movie {}".format(genre_id, movie_num))
                     traceback.print_exc()
 
-    def get_top_movies(self, from_year=2000, to_year=2017, limit=10):
+    def get_top_movies(self, limit):
         # This unconvient way of fetching data is needed to avoid hitting the
-        # maximum page limit of 1000.
-        years = [self._get_top_movies_in_year(y)
-                 for y in range(from_year, to_year + 1)]
-        movies = [y.next() for y in years]
-
-        heap = [(-m["popularity"], m, y) for m, y in zip(movies, years)]
-        heapq.heapify(heap)
+        # maximum page limit of 1000 and to heuristically balance the data.
+        cursors = {g: [g, 0, self._get_top_movies(g)] for g in self._get_genres_ids()}
+        seen_movies = set()
 
         movie_num = 0
-        while movie_num < limit and heap:
-            logging.debug("get_top_movies - returning movie {}".format(movie_num))
-            # Note that popularity might change while retrieving the data
-            # so no absolute ordering guarantee can be made.
-            p, movie, year = heapq.heappop(heap)
-            movie_num += 1
-            yield movie
+        while movie_num < limit and cursors:
+            min_genre, min_count, min_cursor = min(cursors.values(), key=operator.itemgetter(1))
 
             try:
-                next_movie = year.next()
-                heapq.heappush(heap, (-next_movie["popularity"], next_movie, year))
+                logging.debug("get_top_movies() - fetching movie {}".format(movie_num))
+                movie = min_cursor.next()
+                while movie["tmdb_id"] in seen_movies:
+                    movie = min_cursor.next()
+
+                yield movie
+                movie_num += 1
+                seen_movies.add(movie["tmdb_id"])
+
+                for genre in movie["genres_ids"]:
+                    cursor = cursors.get(genre, None)
+                    if cursor:
+                        cursor[1] += 1
             except StopIteration:
-                continue
+                del cursors[min_genre]
+
 
     def _get_crew(self, credits, job):
         results = []
@@ -155,6 +157,7 @@ class TMDBW:
           "adult": movie["adult"],
           "budget": movie["budget"],
           "genres": [g["name"] for g in movie["genres"]],
+          "genres_ids": [g["id"] for g in movie["genres"]],
           "language": movie["original_language"],
           "overview": movie["overview"],
           "poster": transformed_poster,
@@ -165,6 +168,10 @@ class TMDBW:
           "title": movie["title"],
           "popularity": movie["popularity"]
         }
+
+    def _get_genres_ids(self):
+        genres = json.loads(self._request("/genre/movie/list"))["genres"]
+        return [g["id"] for g in genres]
 
     def get_genres(self):
         """Get the list of genres defined on TMDB"""
