@@ -5,7 +5,7 @@ import numpy as np
 import tables
 
 from pandas.io.json import json_normalize
-from tmdbw import TMDBW
+from store.tmdbw import TMDBW
 from time import time
 
 
