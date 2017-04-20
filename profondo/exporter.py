@@ -12,7 +12,7 @@ from time import time
 if __name__ == "__main__":
     parser = argparse.ArgumentParser("TMDB Data Exporter")
     parser.add_argument("--limit", help="Number of movies to download", type=int, default=10000)
-    parser.add_argument("--logging", help="Enable logging", type=bool, default=False)
+    parser.add_argument("--logging", help="Enable logging", default=False, action="store_true")
     parser.add_argument("--api-key", help="TMDB API key", type=str, required=True)
     args = parser.parse_args()
 
