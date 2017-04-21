@@ -6,13 +6,13 @@ import numpy as np
 import keras
 
 from keras import backend as K
-from keras.callbacks import ModelCheckpoint, LambdaCallback, EarlyStopping
+from keras.callbacks import ModelCheckpoint, LambdaCallback, EarlyStopping, ReduceLROnPlateau
 from keras.models import Sequential
 from keras.layers import Conv2D, MaxPooling2D, Dense, Dropout, Flatten, Activation, ZeroPadding2D
 from keras.preprocessing.image import ImageDataGenerator
 from os.path import join
 from sklearn.preprocessing import MultiLabelBinarizer
-from sklearn.metrics import classification_report
+from sklearn.metrics import classification_report, hamming_loss, jaccard_similarity_score
 
 MODEL_FILE = "model.h5"
 
@@ -68,7 +68,7 @@ def build_model(x_train, y_train):
     model.add(ZeroPadding2D((1, 1)))
     model.add(Conv2D(8, (3, 3), activation='relu'))
     model.add(MaxPooling2D((2, 2), strides=(2, 2)))
-    model.add(Dropout(0.5))
+    model.add(Dropout(0.25))
 
     model.add(ZeroPadding2D((1, 1)))
     model.add(Conv2D(16, (3, 3), activation='relu'))
@@ -96,18 +96,21 @@ def build_model(x_train, y_train):
     return model
 
 
-def report_callback(epoch, logs):
+def report_callback(epoch, logs, data_standardizer=None):
     if epoch % 5 == 0:
         print("Classification report for validation set:")
-        prediction_proba = model.predict_proba(x_test)
+        prediction_proba =\
+                model.predict_proba(data_standardizer.standardize(x_test) if data_standardizer else x_test)
         prediction = (prediction_proba > 0.5).astype(int)
-        print(classification_report(y_pred=prediction, y_true=y_test))
+        print("\n{}\n".format(classification_report(y_pred=prediction, y_true=y_test)))
+        print("Hamming loss:\t\t{:.3f}".format(hamming_loss(y_test, prediction)))
+        print("Jaccard similarity:\t{:.3f}".format(jaccard_similarity_score(y_test, prediction)))
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser("TMDB Data Exporter")
     parser.add_argument("--logging", help="Enable logging", default=False, action="store_true")
-    parser.add_argument("--augment", help="Augment images", default=True, action="store_true")
+    parser.add_argument("--augment", help="Augment images", default=False, action="store_true")
     parser.add_argument("--input-dir", help="Directory with movie data", type=str, default=".")
     parser.add_argument("--batch-size", help="Batch size", type=int, default=128)
     parser.add_argument("--epochs", help="Epochs", type=int, default=50)
@@ -131,10 +134,9 @@ if __name__ == "__main__":
     checkpointer = ModelCheckpoint(filepath=MODEL_FILE, verbose=1)
     genre_weights = dict(enumerate(1 / y_train.mean(axis=0)))
 
-    callbacks = [checkpointer, EarlyStopping(monitor="val_loss", patience=10)]
+    callbacks = [checkpointer, ReduceLROnPlateau(monitor="val_loss", patience=10, verbose=1, min_lr=10e-6)]
     if args.logging:
         print(model.summary())
-        callbacks.append(LambdaCallback(on_epoch_end=report_callback))
 
     if args.augment:
         # Use ImageDataGenerator to augment images
@@ -145,14 +147,22 @@ if __name__ == "__main__":
             vertical_flip=False)
         datagen.fit(x_train)
 
+        # We need to add a callback that standardizes the data.
+        if args.logging:
+            epoc_callback = lambda epoc, logs: report_callback(epoc, logs, datagen)
+            callbacks.append(LambdaCallback(on_epoch_end=epoc_callback))
+
         model.fit_generator(datagen.flow(x_train, y_train, batch_size=args.batch_size),
                   steps_per_epoch=int(len(x_train)/args.batch_size),
                   epochs=args.epochs,
                   verbose=args.logging,
-                  validation_data=(x_val, y_val),
+                  validation_data=(datagen.standardize(x_val), y_val),
                   class_weight=genre_weights,
                   callbacks=callbacks)
     else:
+        if args.logging:
+            callbacks.append(LambdaCallback(on_epoch_end=report_callback))
+
         model.fit(x_train, y_train,
                   batch_size=args.batch_size,
                   epochs=args.epochs,
