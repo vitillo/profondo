@@ -6,20 +6,22 @@ import numpy as np
 import keras
 
 from keras import backend as K
-from keras.callbacks import ModelCheckpoint, LambdaCallback, EarlyStopping, ReduceLROnPlateau
+from keras.callbacks import ModelCheckpoint, LambdaCallback, ReduceLROnPlateau
 from keras.models import Sequential
-from keras.layers import Conv2D, MaxPooling2D, Dense, Dropout, Flatten, Activation, ZeroPadding2D
+from keras.layers import Conv2D, MaxPooling2D, Dense, Dropout, Flatten, ZeroPadding2D
 from keras.preprocessing.image import ImageDataGenerator
 from os.path import join
 from sklearn.preprocessing import MultiLabelBinarizer
 from sklearn.metrics import classification_report, hamming_loss, jaccard_similarity_score
 
-MODEL_FILE = "model.h5"
+MODEL_FILENAME = "model.h5"
+IMAGE_FILENAME = "image_export.h5"
+METADATA_FILENAME = "metadata_export"
 
 
 def load_data(path):
-    images = tables.open_file(join(path, "image_export.h5"), "r").get_node("/images")[:]
-    meta = pd.read_pickle(join(path, "metadata_export"))
+    images = tables.open_file(join(path, IMAGE_FILENAME), "r").get_node("/images")[:]
+    meta = pd.read_pickle(join(path, METADATA_FILENAME))
     meta.index = np.arange(len(meta))
 
     assert(len(meta["tmdb_id"].unique()) == len(meta))
@@ -63,64 +65,24 @@ def train_test_split(meta, images, train_ratio=0.7, validation_ratio=0.15):
 
 def build_model(x_train, y_train):
     model = Sequential()
-    model.add(ZeroPadding2D((1, 1), input_shape=x_train.shape[1:]))
-    model.add(Conv2D(8, (3, 3), activation='relu'))
-    model.add(ZeroPadding2D((1, 1)))
-    model.add(Conv2D(8, (3, 3), activation='relu'))
-    model.add(MaxPooling2D((2, 2), strides=(2, 2)))
-    model.add(Dropout(0.25))
+    model.add(Conv2D(32, (3, 3), activation='relu', input_shape=x_train.shape[1:]))
+    model.add(MaxPooling2D((2, 2)))
 
-    model.add(ZeroPadding2D((1, 1)))
-    model.add(Conv2D(16, (3, 3), activation='relu'))
-    model.add(ZeroPadding2D((1, 1)))
-    model.add(Conv2D(16, (3, 3), activation='relu'))
-    model.add(MaxPooling2D((2, 2), strides=(2, 2)))
-    model.add(Dropout(0.5))
+    model.add(Conv2D(32, (3, 3), activation='relu'))
+    model.add(MaxPooling2D((2, 2)))
 
-    model.add(ZeroPadding2D((1, 1)))
-    model.add(Conv2D(32, (3, 3), activation='relu'))
-    model.add(ZeroPadding2D((1, 1)))
-    model.add(Conv2D(32, (3, 3), activation='relu'))
-    model.add(ZeroPadding2D((1, 1)))
-    model.add(Conv2D(32, (3, 3), activation='relu'))
-    model.add(MaxPooling2D((2, 2), strides=(2, 2)))
-    model.add(Dropout(0.5))
+    model.add(Conv2D(64, (3, 3), activation='relu'))
+    model.add(MaxPooling2D((2, 2)))
 
     model.add(Flatten())
-    model.add(Dense(512, activation='relu'))
-    model.add(Dropout(0.5))
-    model.add(Dense(512, activation='relu'))
+    model.add(Dense(64, activation='relu'))
     model.add(Dropout(0.5))
     model.add(Dense(y_train.shape[1], activation='sigmoid'))
 
     return model
 
 
-def report_callback(epoch, logs, data_standardizer=None):
-    if epoch % 5 == 0:
-        print("Classification report for validation set:")
-        prediction_proba =\
-                model.predict_proba(data_standardizer.standardize(x_test) if data_standardizer else x_test)
-        prediction = (prediction_proba > 0.5).astype(int)
-        print("\n{}\n".format(classification_report(y_pred=prediction, y_true=y_test)))
-        print("Hamming loss:\t\t{:.3f}".format(hamming_loss(y_test, prediction)))
-        print("Jaccard similarity:\t{:.3f}".format(jaccard_similarity_score(y_test, prediction)))
-
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser("TMDB Data Exporter")
-    parser.add_argument("--logging", help="Enable logging", default=False, action="store_true")
-    parser.add_argument("--augment", help="Augment images", default=False, action="store_true")
-    parser.add_argument("--input-dir", help="Directory with movie data", type=str, default=".")
-    parser.add_argument("--batch-size", help="Batch size", type=int, default=128)
-    parser.add_argument("--epochs", help="Epochs", type=int, default=50)
-    args = parser.parse_args()
-
-    if args.logging:
-        logging.getLogger().setLevel(logging.DEBUG)
-
-    meta, images = load_data(args.input_dir)
-    x_train, y_train, x_test, y_test, x_val, y_val = train_test_split(meta, images)
+def load_model(x_train, y_train):
     try:
         model = keras.models.load_model(MODEL_FILE)
         logging.info("Checkpointed model loaded")
@@ -131,42 +93,55 @@ if __name__ == "__main__":
     model.compile(loss=keras.losses.binary_crossentropy,
                   optimizer=keras.optimizers.Adam())
 
-    checkpointer = ModelCheckpoint(filepath=MODEL_FILE, verbose=1)
-    genre_weights = dict(enumerate(1 / y_train.mean(axis=0)))
+    logging.info(model.summary())
+    return model
 
-    callbacks = [checkpointer, ReduceLROnPlateau(monitor="val_loss", patience=10, verbose=1, min_lr=10e-6)]
+
+def report_callback(epoch, x_val, y_val):
+    if epoch % 5 == 0:
+        prediction_proba = model.predict_proba(x_val)
+        prediction = (prediction_proba > 0.5).astype(int)
+
+        logging.info("Classification report for validation set:")
+        logging.info("\n{}\n".format(classification_report(y_pred=prediction, y_true=y_val)))
+        logging.info("Hamming loss:\t\t{:.3f}".format(hamming_loss(y_val, prediction)))
+        logging.info("Jaccard similarity:\t{:.3f}".format(jaccard_similarity_score(y_val, prediction)))
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser("TMDB Data Exporter")
+    parser.add_argument("--logging", help="Enable logging", default=False, action="store_true")
+    parser.add_argument("--input-dir", help="Directory with movie data", type=str, default=".")
+    parser.add_argument("--batch-size", help="Batch size", type=int, default=128)
+    parser.add_argument("--epochs", help="Epochs", type=int, default=100)
+    args = parser.parse_args()
+
     if args.logging:
-        print(model.summary())
+        logging.getLogger().setLevel(logging.INFO)
 
-    if args.augment:
-        # Use ImageDataGenerator to augment images
-        datagen = ImageDataGenerator(
-            featurewise_center=True,
-            featurewise_std_normalization=False,
-            horizontal_flip=True,
-            vertical_flip=False)
-        datagen.fit(x_train)
+    meta, images = load_data(args.input_dir)
+    x_train, y_train, x_test, y_test, x_val, y_val = train_test_split(meta, images)
+    genre_weights = (1 / y_train.mean(axis=0))
+    genre_weights = dict(enumerate(genre_weights/genre_weights.max()))
 
-        # We need to add a callback that standardizes the data.
-        if args.logging:
-            epoc_callback = lambda epoc, logs: report_callback(epoc, logs, datagen)
-            callbacks.append(LambdaCallback(on_epoch_end=epoc_callback))
+    callbacks = [
+        ModelCheckpoint(filepath=MODEL_FILENAME, monitor='val_loss', save_best_only=True, verbose=1),
+        ReduceLROnPlateau(monitor="val_loss", patience=10, verbose=1, min_lr=10e-6),
+        LambdaCallback(on_epoch_end=lambda e, l: report_callback(e, x_val, y_val))
+    ]
 
-        model.fit_generator(datagen.flow(x_train, y_train, batch_size=args.batch_size),
-                  steps_per_epoch=int(len(x_train)/args.batch_size),
-                  epochs=args.epochs,
-                  verbose=args.logging,
-                  validation_data=(datagen.standardize(x_val), y_val),
-                  class_weight=genre_weights,
-                  callbacks=callbacks)
-    else:
-        if args.logging:
-            callbacks.append(LambdaCallback(on_epoch_end=report_callback))
+    train_datagen = ImageDataGenerator()
+    train_generator = train_datagen.flow(x_train, y_train, batch_size=args.batch_size)
+    validation_datagen = ImageDataGenerator()
+    validation_generator = validation_datagen.flow(x_val, y_val, batch_size=args.batch_size)
 
-        model.fit(x_train, y_train,
-                  batch_size=args.batch_size,
-                  epochs=args.epochs,
-                  verbose=args.logging,
-                  validation_data=(x_val, y_val),
-                  class_weight=genre_weights,
-                  callbacks=callbacks)
+    model = load_model(x_train, y_train)
+    model.fit_generator(
+        train_generator,
+        steps_per_epoch=len(x_train) // args.batch_size,
+        epochs=args.epochs,
+        verbose=args.logging,
+        validation_data=validation_generator,
+        validation_steps=len(x_val) // args.batch_size,
+        class_weight=genre_weights,
+        callbacks=callbacks)
