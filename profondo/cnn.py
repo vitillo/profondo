@@ -14,6 +14,7 @@ from keras.preprocessing.image import ImageDataGenerator
 from os.path import join
 from sklearn.preprocessing import MultiLabelBinarizer
 from sklearn.metrics import classification_report, hamming_loss, f1_score
+from sklearn.utils.class_weight import compute_class_weight
 
 OUTPUT_FILE = "predictions.npz"
 MODEL_DIRECTORY = "models"
@@ -112,23 +113,6 @@ def load_model(model_filename, x_train, y_train):
     return model
 
 
-def best_threshold(model, x_val, y_val):
-    thresholds = np.arange(0.1, 1, 0.01)
-    prediction_proba = model.predict_proba(x_val)
-    best_score = -1
-    best_threshold = -1
-
-    for t in thresholds:
-        prediction = (prediction_proba > t).astype(int)
-        score = f1_score(y_val, prediction)
-        if score > best_score:
-            best_score = score
-            best_threshold = t
-
-    assert best_threshold != -1
-    return 0.5 # best_threshold TODO: (causes more trouble than anything...)
-
-
 def predict(model, threshold, x):
     prediction_proba = model.predict_proba(x)
     return (prediction_proba > threshold).astype(int)
@@ -136,26 +120,11 @@ def predict(model, threshold, x):
 
 def report_callback(epoch, model, x_val, y_val):
     if epoch % 5 == 0:
-        threshold = best_threshold(model, x_val, y_val)
-        prediction = predict(model, threshold, x_val)
+        prediction = predict(model, 0.5, x_val)
         logging.info("Classification report for validation set:")
         logging.info("\n{}\n".format(classification_report(y_pred=prediction, y_true=y_val)))
         logging.info("Hamming loss:\t\t{:.3f}".format(hamming_loss(y_val, prediction)))
         logging.info("F1 Score:\t\t{:.3f}".format(f1_score(y_val, prediction)))
-
-
-def filter_genre(x, y):
-    is_genre = y == 1
-    other_genres = ~is_genre
-    length = min(is_genre.sum(), other_genres.sum())
-    genre_x = x[is_genre][:length]
-    genre_y = y[is_genre][:length]
-    other_genres_x = x[other_genres][:length]
-    other_genres_y = y[other_genres][:length]
-    x = np.concatenate((genre_x, other_genres_x))
-    y = np.concatenate((genre_y, other_genres_y))
-    idx = np.random.permutation(np.arange(len(x)))
-    return x[idx], y[idx]
 
 
 if __name__ == "__main__":
@@ -179,10 +148,6 @@ if __name__ == "__main__":
     predictions = np.array([])
     for idx, genre in enumerate(classes):
         logging.info("Training genre model for genre {}".format(genre))
-
-        # Balance training and validation set so that there are as many movies
-        # of the selected genre as there are movies that don't belong to it.
-        x_train_genre, y_train_genre = filter_genre(x_train, y_train[:, idx])
         model_filename = os.path.join(MODEL_DIRECTORY, "{}_{}".format(genre, MODEL_FILENAME))
 
         callbacks = [
@@ -192,21 +157,22 @@ if __name__ == "__main__":
         ]
 
         train_datagen = ImageDataGenerator(horizontal_flip=True)
-        train_generator = train_datagen.flow(x_train_genre, y_train_genre, batch_size=args.batch_size)
+        train_generator = train_datagen.flow(x_train, y_train[:, idx], batch_size=args.batch_size)
+        weights = dict(zip([0, 1], compute_class_weight("balanced", [0, 1], y_train[:, idx])))
 
-        model = load_model(model_filename, x_train_genre, y_train_genre)
+        model = load_model(model_filename, x_train, y_train[:, idx])
         model.fit_generator(
             train_generator,
-            steps_per_epoch=len(x_train_genre) // args.batch_size,
+            steps_per_epoch=len(x_train) // args.batch_size,
             epochs=args.epochs,
             verbose=args.logging,
             validation_data=(x_val, y_val[:, idx]),
+            class_weight=weights,
             callbacks=callbacks)
 
         # Load best model and evaluate it on the test data
-        model = load_model(model_filename, x_train_genre, y_train_genre)
-        threshold = best_threshold(model, x_val, y_val[:, idx])
-        prediction = predict(model, threshold, x_test)
+        model = load_model(model_filename, x_train, y_train[:, idx])
+        prediction = predict(model, 0.5, x_test)
         if predictions.shape[0] > 0:
             predictions = np.hstack((predictions, prediction))
         else:
