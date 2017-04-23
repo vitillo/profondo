@@ -4,6 +4,7 @@ import tables
 import pandas as pd
 import numpy as np
 import keras
+import os
 
 from keras import backend as K
 from keras.callbacks import ModelCheckpoint, LambdaCallback, EarlyStopping
@@ -12,8 +13,10 @@ from keras.layers import Conv2D, MaxPooling2D, Dense, Dropout, Flatten, ZeroPadd
 from keras.preprocessing.image import ImageDataGenerator
 from os.path import join
 from sklearn.preprocessing import MultiLabelBinarizer
-from sklearn.metrics import classification_report, hamming_loss
+from sklearn.metrics import classification_report, hamming_loss, f1_score
 
+OUTPUT_FILE = "predictions.npz"
+MODEL_DIRECTORY = "models"
 MODEL_FILENAME = "model.h5"
 IMAGE_FILENAME = "image_export.h5"
 METADATA_FILENAME = "metadata_export"
@@ -28,10 +31,19 @@ def load_data(path):
     assert(len(images) == len(meta))
     assert K.image_data_format() == 'channels_last'
 
-    return meta, images
+    binarizer = MultiLabelBinarizer().fit(meta["genres"])
+    genres = binarizer.transform(meta["genres"])
+    for genre, p in zip(binarizer.classes_, genres.mean(axis=0)):
+        logging.info("{} genre proportion is {:.2f}".format(genre, p))
+
+    # Center images by channel
+    for i in range(3):
+        images[..., i] -= images[..., i].mean()
+
+    return genres, images, list(binarizer.classes_)
 
 
-def train_test_split(genre, meta, images, train_ratio=0.7, validation_ratio=0.15):
+def train_test_split(genres, images, train_ratio=0.7, validation_ratio=0.15):
     np.random.seed(42)
     idx = np.random.permutation(np.arange(len(images)))
     train_size = int(len(idx)*train_ratio)
@@ -48,7 +60,6 @@ def train_test_split(genre, meta, images, train_ratio=0.7, validation_ratio=0.15
     x_test = images[test_idx]
     x_validation = images[validation_idx]
 
-    genres = np.array(meta["genres"].apply(lambda x: genre in x)).astype(int)
     y_train = genres[train_idx]
     y_test = genres[test_idx]
     y_validation = genres[validation_idx]
@@ -56,7 +67,7 @@ def train_test_split(genre, meta, images, train_ratio=0.7, validation_ratio=0.15
     logging.info("Train set size is {}".format(len(x_train)))
     logging.info("Test set size is {}".format(len(x_test)))
     logging.info("Validation set size is {}".format(len(x_validation)))
-    return x_train, y_train, x_test, y_test, x_validation, y_validation
+    return x_train, y_train, x_test, y_test, x_validation, y_validation, test_idx
 
 
 def build_model(x_train, y_train):
@@ -101,32 +112,50 @@ def load_model(model_filename, x_train, y_train):
     return model
 
 
+def best_threshold(model, x_val, y_val):
+    thresholds = np.arange(0.1, 1, 0.01)
+    prediction_proba = model.predict_proba(x_val)
+    best_score = -1
+    best_threshold = -1
+
+    for t in thresholds:
+        prediction = (prediction_proba > t).astype(int)
+        score = f1_score(y_val, prediction)
+        if score > best_score:
+            best_score = score
+            best_threshold = t
+
+    assert best_threshold != -1
+    return 0.5 # best_threshold TODO: (causes more trouble than anything...)
+
+
+def predict(model, threshold, x):
+    prediction_proba = model.predict_proba(x)
+    return (prediction_proba > threshold).astype(int)
+
+
 def report_callback(epoch, model, x_val, y_val):
     if epoch % 5 == 0:
-        prediction_proba = model.predict_proba(x_val)
-        prediction = (prediction_proba > 0.5).astype(int)
-
+        threshold = best_threshold(model, x_val, y_val)
+        prediction = predict(model, threshold, x_val)
         logging.info("Classification report for validation set:")
         logging.info("\n{}\n".format(classification_report(y_pred=prediction, y_true=y_val)))
         logging.info("Hamming loss:\t\t{:.3f}".format(hamming_loss(y_val, prediction)))
+        logging.info("F1 Score:\t\t{:.3f}".format(f1_score(y_val, prediction)))
 
 
-def filter_data(meta, images, genre):
-    is_genre = np.array(meta["genres"].apply(lambda x: genre in x))
+def filter_genre(x, y):
+    is_genre = y == 1
     other_genres = ~is_genre
     length = min(is_genre.sum(), other_genres.sum())
-
-    genre_meta = meta[is_genre].iloc[:length]
-    other_genres_meta = meta[other_genres].iloc[:length]
-    meta = genre_meta.append(other_genres_meta)
-    meta.index = range(len(meta))
-
-    genre_images = images[is_genre][:length]
-    other_genres_images = images[other_genres][:length]
-    images = np.concatenate((genre_images, other_genres_images))
-
-    assert len(meta) == len(images)
-    return meta, images
+    genre_x = x[is_genre][:length]
+    genre_y = y[is_genre][:length]
+    other_genres_x = x[other_genres][:length]
+    other_genres_y = y[other_genres][:length]
+    x = np.concatenate((genre_x, other_genres_x))
+    y = np.concatenate((genre_y, other_genres_y))
+    idx = np.random.permutation(np.arange(len(x)))
+    return x[idx], y[idx]
 
 
 if __name__ == "__main__":
@@ -135,33 +164,51 @@ if __name__ == "__main__":
     parser.add_argument("--input-dir", help="Directory with movie data", type=str, default=".")
     parser.add_argument("--batch-size", help="Batch size", type=int, default=64)
     parser.add_argument("--epochs", help="Epochs", type=int, default=100)
-    parser.add_argument("--genre", help="Genre to train the model on", type=str, default="Drama")
     args = parser.parse_args()
 
     if args.logging:
         logging.getLogger().setLevel(logging.INFO)
 
-    meta, images = load_data(args.input_dir)
-    meta, images = filter_data(meta, images, args.genre)
-    x_train, y_train, x_test, y_test, x_val, y_val = train_test_split(args.genre, meta, images)
-    model_filename = "{}_{}".format(args.genre.lower(), MODEL_FILENAME)
+    genres, images, classes = load_data(args.input_dir)
+    x_train, y_train, x_test, y_test, x_val, y_val, test_idx = \
+        train_test_split(genres, images)
 
-    callbacks = [
-        ModelCheckpoint(filepath=model_filename, monitor='val_loss', save_best_only=True, verbose=1),
-        EarlyStopping(monitor='val_loss', min_delta=0, patience=10, verbose=1, mode='auto'),
-        LambdaCallback(on_epoch_end=lambda e, l: report_callback(e, model, x_val, y_val))
-    ]
+    if not os.path.exists(MODEL_DIRECTORY):
+        os.makedirs(MODEL_DIRECTORY)
 
-    train_datagen = ImageDataGenerator(
-        horizontal_flip=True
-    )
-    train_generator = train_datagen.flow(x_train, y_train, batch_size=args.batch_size)
+    predictions = np.array([])
+    for idx, genre in enumerate(classes):
+        logging.info("Training genre model for genre {}".format(genre))
 
-    model = load_model(model_filename, x_train, y_train)
-    model.fit_generator(
-        train_generator,
-        steps_per_epoch=len(x_train) // args.batch_size,
-        epochs=args.epochs,
-        verbose=args.logging,
-        validation_data=(x_val, y_val),
-        callbacks=callbacks)
+        # Balance training and validation set so that there are as many movies
+        # of the selected genre as there are movies that don't belong to it.
+        x_train_genre, y_train_genre = filter_genre(x_train, y_train[:, idx])
+        model_filename = os.path.join(MODEL_DIRECTORY, "{}_{}".format(genre, MODEL_FILENAME))
+
+        callbacks = [
+            ModelCheckpoint(filepath=model_filename, monitor='val_loss', save_best_only=True, verbose=1),
+            EarlyStopping(monitor='val_loss', min_delta=0, patience=10, verbose=1, mode='auto'),
+            LambdaCallback(on_epoch_end=lambda e, l: report_callback(e, model, x_val, y_val[:, idx]))
+        ]
+
+        train_datagen = ImageDataGenerator(horizontal_flip=True)
+        train_generator = train_datagen.flow(x_train_genre, y_train_genre, batch_size=args.batch_size)
+
+        model = load_model(model_filename, x_train_genre, y_train_genre)
+        model.fit_generator(
+            train_generator,
+            steps_per_epoch=len(x_train_genre) // args.batch_size,
+            epochs=args.epochs,
+            verbose=args.logging,
+            validation_data=(x_val, y_val[:, idx]),
+            callbacks=callbacks)
+
+        # Load best model and evaluate it on the test data
+        model = load_model(model_filename, x_train_genre, y_train_genre)
+        threshold = best_threshold(model, x_val, y_val[:, idx])
+        prediction = predict(model, threshold, x_test)
+        if predictions.shape[0] > 0:
+            predictions = np.hstack((predictions, prediction))
+        else:
+            predictions = prediction
+        np.savez(OUTPUT_FILE, predictions=predictions, test_idx=test_idx)
