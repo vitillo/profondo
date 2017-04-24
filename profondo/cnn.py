@@ -6,9 +6,9 @@ import numpy as np
 import keras
 
 from keras import backend as K
-from keras.callbacks import ModelCheckpoint, LambdaCallback, ReduceLROnPlateau
+from keras.callbacks import ModelCheckpoint, LambdaCallback, EarlyStopping
 from keras.models import Sequential
-from keras.layers import Conv2D, MaxPooling2D, Dense, Dropout, Flatten, ZeroPadding2D
+from keras.layers import Conv2D, MaxPooling2D, Dense, Dropout, Flatten
 from keras.preprocessing.image import ImageDataGenerator
 from os.path import join
 from sklearn.preprocessing import MultiLabelBinarizer
@@ -27,6 +27,10 @@ def load_data(path):
     assert(len(meta["tmdb_id"].unique()) == len(meta))
     assert(len(images) == len(meta))
     assert K.image_data_format() == 'channels_last'
+
+    # Center images by channel
+    for i in range(3):
+        images[..., i] -= images[..., i].mean()
 
     return meta, images
 
@@ -97,12 +101,12 @@ def load_model(x_train, y_train):
     return model
 
 
-def report_callback(epoch, x_val, y_val):
+def report_callback(epoch, model, x_val, y_val):
     if epoch % 5 == 0:
         prediction_proba = model.predict_proba(x_val)
         prediction = (prediction_proba > 0.5).astype(int)
 
-        logging.info("Classification report for validation set:")
+        logging.info("Classification report")
         logging.info("\n{}\n".format(classification_report(y_pred=prediction, y_true=y_val)))
         logging.info("Hamming loss:\t\t{:.3f}".format(hamming_loss(y_val, prediction)))
         logging.info("Jaccard similarity:\t{:.3f}".format(jaccard_similarity_score(y_val, prediction)))
@@ -112,7 +116,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser("TMDB Data Exporter")
     parser.add_argument("--logging", help="Enable logging", default=False, action="store_true")
     parser.add_argument("--input-dir", help="Directory with movie data", type=str, default=".")
-    parser.add_argument("--batch-size", help="Batch size", type=int, default=128)
+    parser.add_argument("--batch-size", help="Batch size", type=int, default=64)
     parser.add_argument("--epochs", help="Epochs", type=int, default=100)
     args = parser.parse_args()
 
@@ -121,19 +125,20 @@ if __name__ == "__main__":
 
     meta, images = load_data(args.input_dir)
     x_train, y_train, x_test, y_test, x_val, y_val = train_test_split(meta, images)
-    genre_weights = (1 / y_train.mean(axis=0))
-    genre_weights = dict(enumerate(genre_weights/genre_weights.max()))
+
+    # See sklearn.utils.class_weight.compute_class_weight
+    genre_weights = y_train.sum()/(y_train.shape[1]*y_train.sum(axis=0).astype(float))
+    genre_weights = dict(enumerate(genre_weights))
+    logging.info("Genre weights: {}".format(genre_weights))
 
     callbacks = [
         ModelCheckpoint(filepath=MODEL_FILENAME, monitor='val_loss', save_best_only=True, verbose=1),
-        ReduceLROnPlateau(monitor="val_loss", patience=10, verbose=1, min_lr=10e-6),
-        LambdaCallback(on_epoch_end=lambda e, l: report_callback(e, x_val, y_val))
+        EarlyStopping(monitor='val_loss', min_delta=0, patience=10, verbose=1, mode='auto'),
+        LambdaCallback(on_epoch_end=lambda e, l: report_callback(e, model, x_val, y_val))
     ]
 
     train_datagen = ImageDataGenerator()
     train_generator = train_datagen.flow(x_train, y_train, batch_size=args.batch_size)
-    validation_datagen = ImageDataGenerator()
-    validation_generator = validation_datagen.flow(x_val, y_val, batch_size=args.batch_size)
 
     model = load_model(x_train, y_train)
     model.fit_generator(
@@ -141,7 +146,10 @@ if __name__ == "__main__":
         steps_per_epoch=len(x_train) // args.batch_size,
         epochs=args.epochs,
         verbose=args.logging,
-        validation_data=validation_generator,
-        validation_steps=len(x_val) // args.batch_size,
+        validation_data=(x_val, y_val),
         class_weight=genre_weights,
         callbacks=callbacks)
+
+    # Load best model and evaluate it on the test data
+    model = load_model(x_test, y_test)
+    report_callback(0, model, x_test, y_test)
