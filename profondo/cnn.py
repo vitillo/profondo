@@ -84,7 +84,7 @@ def build_model(x_train, y_train):
 
 def load_model(x_train, y_train):
     try:
-        model = keras.models.load_model(MODEL_FILE)
+        model = keras.models.load_model(MODEL_FILENAME)
         logging.info("Checkpointed model loaded")
     except Exception:
         model = build_model(x_train, y_train)
