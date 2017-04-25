@@ -95,7 +95,8 @@ def build_model(x_train, y_train):
     return model
 
 
-def build_pre_trained(network_name, x_train, y_train, x_val, y_val, epochs, batch_size):
+def build_pre_trained(network_name, x_train, y_train, x_val, y_val, epochs, batch_size,
+                      num_to_unfreeze, use_tensorboard):
     supported_models = {
         'vgg16': {
             'class': kapps.VGG16,
@@ -118,6 +119,7 @@ def build_pre_trained(network_name, x_train, y_train, x_val, y_val, epochs, batc
     def generate_top_model(input_shape, output_shape):
         m = Sequential()
         m.add(Flatten(input_shape=input_shape))
+        m.add(Dense(4096, activation='relu'))
         m.add(Dense(4096, activation='relu'))
         m.add(Dropout(0.5))
         m.add(Dense(1024, activation='relu'))
@@ -146,9 +148,14 @@ def build_pre_trained(network_name, x_train, y_train, x_val, y_val, epochs, batc
         callbacks = [
             ReduceLROnPlateau(monitor='val_loss', factor=0.2, patience=5, min_lr=10e-6),
             ModelCheckpoint(filepath=TOP_MODEL_WEIGHTS_FILE, monitor='val_loss', save_best_only=True,
-                            save_weights_only=True, verbose=1),
-            TensorBoard(log_dir=join(TB_DIR, 'top'), histogram_freq=1, write_graph=True, write_images=False)
+                            save_weights_only=True, verbose=1)
         ]
+
+        # Optionally enalbe tensorboard.
+        if use_tensorboard:
+            callbacks.append(TensorBoard(log_dir=join(TB_DIR, 'top'), histogram_freq=1,
+                                         write_graph=True, write_images=False))
+
         top_model.fit(bottleneck_train, y_train,
                       epochs=epochs,
                       batch_size=batch_size,
@@ -165,7 +172,7 @@ def build_pre_trained(network_name, x_train, y_train, x_val, y_val, epochs, batc
 
     # Set all the convolutional layer in the pre-trained network to
     # to non-trainable (weights will not be updated).
-    for layer in model.layers:
+    for layer in model.layers[:-num_to_unfreeze]:
         layer.trainable = False
 
     # Join the convolutional part and the top layers. See
@@ -212,7 +219,10 @@ if __name__ == "__main__":
     parser.add_argument("--input-dir", help="Directory with movie data", type=str, default=".")
     parser.add_argument("--batch-size", help="Batch size", type=int, default=64)
     parser.add_argument("--pre-trained", help="Pre-trained network name", type=str)
+    parser.add_argument("--unfreeze-layers", type=int, default=4,
+                        help="Number of convolutional layers to unfreeze in the pre-trained network")
     parser.add_argument("--epochs", help="Epochs", type=int, default=100)
+    parser.add_argument("--tensorboard", help="Enable tensorboard", default=False, action="store_true")
     args = parser.parse_args()
 
     if args.logging:
@@ -227,15 +237,18 @@ if __name__ == "__main__":
     callbacks = [
         ModelCheckpoint(filepath=MODEL_FILENAME, monitor='val_loss', save_best_only=True, verbose=1),
         EarlyStopping(monitor='val_loss', min_delta=0, patience=10, verbose=1, mode='auto'),
-        TensorBoard(log_dir=join(TB_DIR, 'full'), histogram_freq=1, write_graph=True, write_images=False),
         LambdaCallback(on_epoch_end=lambda e, l: report_callback(e, model, x_val, y_val))
     ]
+
+    if args.tensorboard:
+        callbacks.append(TensorBoard(log_dir=join(TB_DIR, 'full'), histogram_freq=1,
+                                     write_graph=True, write_images=False))
 
     train_datagen = ImageDataGenerator()
     train_generator = train_datagen.flow(x_train, y_train, batch_size=args.batch_size)
 
     model = build_pre_trained(args.pre_trained, x_train, y_train, x_val, y_val, args.epochs,
-                              args.batch_size)\
+                              args.batch_size, args.unfreeze_layers, args.tensorboard)\
             if args.pre_trained else load_model(x_train, y_train)
     model.fit_generator(
         train_generator,
