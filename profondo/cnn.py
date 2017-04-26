@@ -207,7 +207,8 @@ def report_callback(epoch, model, x_val, y_val):
     def recall(y_true, y_pred):
         tp = (y_true & y_pred).sum(axis=1)
         p = y_true.sum(axis=1)
-        ratio = np.nan_to_num(tp/p.astype(float))
+        ratio = tp/p.astype(float)
+        ratio[p == 0.0] = 1.0
         return ratio.mean()
 
     def precision(y_true, y_pred):
