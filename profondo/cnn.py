@@ -22,7 +22,7 @@ METADATA_FILENAME = "metadata_export"
 TB_DIR = 'tensorboard'
 
 
-def load_data(path):
+def load_data(path, sample_limit):
     images = tables.open_file(join(path, IMAGE_FILENAME), "r").get_node("/images")[:]
     meta = pd.read_pickle(join(path, METADATA_FILENAME))
     meta.index = np.arange(len(meta))
@@ -35,7 +35,8 @@ def load_data(path):
     for i in range(3):
         images[..., i] -= images[..., i].mean()
 
-    return meta, images
+    sample_limit = sample_limit if sample_limit else len(meta)
+    return meta.iloc[:sample_limit], images[:sample_limit]
 
 
 def compute_genre_weights(y_train):
@@ -107,7 +108,7 @@ def build_pre_trained(network_name, x_train, y_train, x_val, y_val, epochs, batc
             }
         }
     }
-    
+
     if not network_name in supported_models:
         raise Exception("Unsupported pre-trained model {}".format(network_name))
 
@@ -151,7 +152,7 @@ def build_pre_trained(network_name, x_train, y_train, x_val, y_val, epochs, batc
                             save_weights_only=True, verbose=1)
         ]
 
-        # Optionally enalbe tensorboard.
+        # Optionally enable tensorboard.
         if use_tensorboard:
             callbacks.append(TensorBoard(log_dir=join(TB_DIR, 'top'), histogram_freq=1,
                                          write_graph=True, write_images=False))
@@ -203,14 +204,28 @@ def load_model(x_train, y_train):
 
 
 def report_callback(epoch, model, x_val, y_val):
+    def recall(y_true, y_pred):
+        tp = (y_true & y_pred).sum(axis=1)
+        p = y_true.sum(axis=1)
+        ratio = np.nan_to_num(tp/p.astype(float))
+        return ratio.mean()
+
+    def precision(y_true, y_pred):
+        tp = (y_pred & y_true).sum(axis=1)
+        pp = y_pred.sum(axis=1)
+        ratio = np.nan_to_num(tp/pp.astype(float))
+        return ratio.mean()
+
     if epoch % 5 == 0:
         prediction_proba = model.predict(x_val)
         prediction = (prediction_proba > 0.5).astype(int)
 
         logging.info("Classification report")
-        logging.info("\n{}\n".format(classification_report(y_pred=prediction, y_true=y_val)))
+        logging.info("\n{}\n".format(classification_report(y_val, prediction)))
         logging.info("Hamming loss:\t\t{:.3f}".format(hamming_loss(y_val, prediction)))
         logging.info("Jaccard similarity:\t{:.3f}".format(jaccard_similarity_score(y_val, prediction)))
+        logging.info("Precision:\t{:.3f}".format(precision(y_val, prediction)))
+        logging.info("Recall:\t{:.3f}".format(recall(y_val, prediction)))
 
 
 if __name__ == "__main__":
@@ -223,12 +238,13 @@ if __name__ == "__main__":
                         help="Number of convolutional layers to unfreeze in the pre-trained network")
     parser.add_argument("--epochs", help="Epochs", type=int, default=100)
     parser.add_argument("--tensorboard", help="Enable tensorboard", default=False, action="store_true")
+    parser.add_argument("--sample-limit", help="Maximum number of samples to use", default=None, type=int)
     args = parser.parse_args()
 
     if args.logging:
         logging.getLogger().setLevel(logging.INFO)
 
-    meta, images = load_data(args.input_dir)
+    meta, images = load_data(args.input_dir, args.sample_limit)
     x_train, y_train, x_test, y_test, x_val, y_val = train_test_split(meta, images)
 
     genre_weights = compute_genre_weights(y_train)
